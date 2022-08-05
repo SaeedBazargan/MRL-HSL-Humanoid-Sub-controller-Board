@@ -1,0 +1,4 @@
+MDK-ARM/*
+!MDK-ARM/CM.uvoptx
+!MDK-ARM/CM.uvprojx
+!MDK-ARM/startup_stm32f405xx.s
