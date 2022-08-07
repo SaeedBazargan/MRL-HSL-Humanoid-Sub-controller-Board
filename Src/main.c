@@ -760,58 +760,55 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 	{
 		//uint8_t *bufferEL=&buffer[bufferlastindex]; // mahze ettlea baraye ayande
 		uint8_t packetLength = Master_CheckPacket(huart, &MasterLine1);
-		if(packetLength > 0)
+
+		if(MasterLine1.Buffer[MasterLine1.BufferLastIndex+2] == MY_ID)
 		{
-			if(MasterLine1.Buffer[MasterLine1.BufferLastIndex+2] == MY_ID)
+			if(DXL_CheckSumCalc(&MasterLine1.Buffer[MasterLine1.BufferLastIndex]) == MasterLine1.Buffer[MasterLine1.BufferLastIndex+packetLength-1]) 
 			{
-				if(DXL_CheckSumCalc(&MasterLine1.Buffer[MasterLine1.BufferLastIndex]) == MasterLine1.Buffer[MasterLine1.BufferLastIndex+packetLength-1]) 
+				switch(MasterLine1.Buffer[MasterLine1.BufferLastIndex+4])
 				{
-					switch(MasterLine1.Buffer[MasterLine1.BufferLastIndex+4])
-					{
-						case DXL_READ_DATA:
-							MainBoard_ReadRegister(&MasterLine1.Buffer[MasterLine1.BufferLastIndex]);
-						break;
-						case DXL_WRITE_DATA:
-							if(MasterLine1.Buffer[MasterLine1.BufferLastIndex+5] == 0x18 && MasterLine1.Buffer[MasterLine1.BufferLastIndex+6] == 0x01)
-							{								
-								HAL_GPIO_WritePin(DXL_PWR_EN_GPIO_Port, DXL_PWR_EN_Pin, GPIO_PIN_SET);
-								Est.reset(1,1);
-							}
-							else if (MasterLine1.Buffer[MasterLine1.BufferLastIndex+5] == 0x18 && MasterLine1.Buffer[MasterLine1.BufferLastIndex+6] == 0x00)
-							{
-								HAL_GPIO_WritePin(DXL_PWR_EN_GPIO_Port, DXL_PWR_EN_Pin, GPIO_PIN_RESET);
-							}
-							else if(MasterLine1.Buffer[MasterLine1.BufferLastIndex+5] == 0x4A && MasterLine1.Buffer[MasterLine1.BufferLastIndex+6] == 0x01)
-							{
-								CalibCounter = 0;
-								Calibration();
-							}
-							else
-							{
-								MainBoard_WriteRegister(&MasterLine1.Buffer[MasterLine1.BufferLastIndex]);
-							}
-						break;
-					}
+					case DXL_READ_DATA:
+						MainBoard_ReadRegister(&MasterLine1.Buffer[MasterLine1.BufferLastIndex]);
+					break;
+					case DXL_WRITE_DATA:
+						if(MasterLine1.Buffer[MasterLine1.BufferLastIndex+5] == 0x18 && MasterLine1.Buffer[MasterLine1.BufferLastIndex+6] == 0x01)
+						{								
+							HAL_GPIO_WritePin(DXL_PWR_EN_GPIO_Port, DXL_PWR_EN_Pin, GPIO_PIN_SET);
+							Est.reset(1,1);
+						}
+						else if (MasterLine1.Buffer[MasterLine1.BufferLastIndex+5] == 0x18 && MasterLine1.Buffer[MasterLine1.BufferLastIndex+6] == 0x00)
+						{
+							HAL_GPIO_WritePin(DXL_PWR_EN_GPIO_Port, DXL_PWR_EN_Pin, GPIO_PIN_RESET);
+						}
+						else if(MasterLine1.Buffer[MasterLine1.BufferLastIndex+5] == 0x4A && MasterLine1.Buffer[MasterLine1.BufferLastIndex+6] == 0x01)
+						{
+							CalibCounter = 0;
+							Calibration();
+						}
+						else
+						{
+							MainBoard_WriteRegister(&MasterLine1.Buffer[MasterLine1.BufferLastIndex]);
+						}
+					break;
 				}
 			}
-			else
-			{
-				Queue[nReadyPackets]= MasterLine1.BufferCurrentIndex - packetLength;
-				nReadyPackets++;
-				if(nReadyPackets >= QUEUE_SIZE)
-				{
-					nReadyPackets = QUEUE_SIZE;
-				}
-			}
-			if((BUFFER_SIZE - (int16_t)MasterLine1.BufferCurrentIndex) < MAX_PACKET_SIZE)
-			{
-				MasterLine1.BufferCurrentIndex = 0;
-				MasterLine1.BufferLastIndex = 0;
-			}
-			MasterLine1.BufferLastIndex = MasterLine1.BufferCurrentIndex;
-			Queue_Data_Send();
 		}
-		
+		else
+		{
+			Queue[nReadyPackets]= MasterLine1.BufferCurrentIndex - packetLength;
+			nReadyPackets++;
+			if(nReadyPackets >= QUEUE_SIZE)
+			{
+				nReadyPackets = QUEUE_SIZE;
+			}
+		}
+		if((BUFFER_SIZE - (int16_t)MasterLine1.BufferCurrentIndex) < MAX_PACKET_SIZE)
+		{
+			MasterLine1.BufferCurrentIndex = 0;
+			MasterLine1.BufferLastIndex = 0;
+		}
+		MasterLine1.BufferLastIndex = MasterLine1.BufferCurrentIndex;
+		Queue_Data_Send();
 	}
 //----------------------------------------------------------------
 	else if(huart ->Instance == USART3)
@@ -866,34 +863,9 @@ uint8_t Master_CheckPacket(UART_HandleTypeDef *UARTx, USBLineTypeDef* master)
 	{
 		master->Buffer[master->BufferCurrentIndex]=master->InputData;
 		master->BufferCurrentIndex++;
-		switch(master->CurrentState)
-		{
-			case 0:
-				if(master->Buffer[master->BufferLastIndex] == 255) {master->CurrentState = 1;}
-				else {master->CurrentState = 0;	master->BufferCurrentIndex = master->BufferLastIndex;}
-			break;
-			
-			case 1:
-				if(MasterLine1.Buffer[master->BufferLastIndex+1] == 255) {master->CurrentState = 2;}
-  			else {master->CurrentState = 0; master->BufferCurrentIndex = master->BufferLastIndex;}
-			break;
-			
-			case 2:
-				if(MasterLine1.Buffer[master->BufferLastIndex+2] != 0xFF) {master->CurrentState=3;}
-  			else {master->CurrentState = 0; master->BufferCurrentIndex = master->BufferLastIndex;}
-			break;
-			
-			case 3:
-				if(MasterLine1.Buffer[master->BufferLastIndex+3] > master->Length) {master->Length++;}
-  			else
-				{
-					master->Length = 0;
-					master->CurrentState = 0;
-					uint8_t packetLength = MasterLine1.Buffer[master->BufferLastIndex+3]+4;
-					return packetLength;
-				}
-			break;
-		}
+
+		uint8_t packetLength = MasterLine1.Buffer[master->BufferLastIndex+3]+4;
+		return packetLength;
 	}
 	return 0;
 }
