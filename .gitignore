@@ -1,4 +1,27 @@
-MDK-ARM/*
-!MDK-ARM/CM.uvoptx
-!MDK-ARM/CM.uvprojx
-!MDK-ARM/startup_stm32f405xx.s
+# STM32CubeIDE / Eclipse project settings
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/.settings/
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/.cproject
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/.project
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/.build/
+
+# Build output folders
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/Debug/
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/Release/
+
+# Object files and binaries
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/**/*.o
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/**/*.a
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/**/*.elf
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/**/*.bin
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/**/*.hex
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/**/*.map
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/**/*.lst
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/**/*.d
+
+# Temporary files
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/**/*.tmp
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/**/*.log
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/**/*.bak
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/**/*~
+Read_MultiDXL_FreeRTOS/Read_MultiDXL/**/*.swp
+
