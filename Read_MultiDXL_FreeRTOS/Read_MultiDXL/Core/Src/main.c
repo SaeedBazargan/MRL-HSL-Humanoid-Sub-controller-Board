@@ -32,7 +32,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define DxlBufferSize							50
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -46,9 +46,28 @@ UART_HandleTypeDef huart3;
 UART_HandleTypeDef huart6;
 
 osThreadId defaultTaskHandle;
+osThreadId readPosTaskHandle;
 osSemaphoreId testDXL_semaphoreHandle;
+osSemaphoreId readPosTxCmd_SemaphoreHandle;
+osSemaphoreId readPosRxCmd_SemaphoreHandle;
 /* USER CODE BEGIN PV */
+uint8_t RecData = 0;
+uint8_t recBuffer[DxlBufferSize];
+uint32_t recCount = 0;
 
+typedef enum
+{
+	ID_1 = 0x01,
+	ID_2 = 0x02,
+	ID_3 = 0x03
+}DXL_ID_t;
+
+typedef struct {
+    uint8_t Pose_1;
+    uint8_t Pose_2;
+    uint8_t Pose_3;
+} Pose_ID_t;
+Pose_ID_t dxlID;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -58,10 +77,12 @@ static void MX_UART5_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USART6_UART_Init(void);
 void StartDefaultTask(void const * argument);
+void StartReadPositionTask(void const * argument);
 
 /* USER CODE BEGIN PFP */
 void test_dxl(void);
 uint16_t update_crc(unsigned short crc_accum, unsigned char *data_blk_ptr, unsigned short data_blk_size);
+uint16_t ReadPos(uint8_t ID);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -103,6 +124,8 @@ int main(void)
   MX_USART6_UART_Init();
   /* USER CODE BEGIN 2 */
   HAL_GPIO_WritePin(DXL_PWR_EN_GPIO_Port, DXL_PWR_EN_Pin, GPIO_PIN_SET);
+
+  HAL_UART_Receive_IT(&huart5, &RecData, 1);
   /* USER CODE END 2 */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -114,12 +137,28 @@ int main(void)
   osSemaphoreDef(testDXL_semaphore);
   testDXL_semaphoreHandle = osSemaphoreCreate(osSemaphore(testDXL_semaphore), 1);
 
+  /* definition and creation of readPosTxCmd_Semaphore */
+  osSemaphoreDef(readPosTxCmd_Semaphore);
+  readPosTxCmd_SemaphoreHandle = osSemaphoreCreate(osSemaphore(readPosTxCmd_Semaphore), 1);
+
+  /* definition and creation of readPosRxCmd_Semaphore */
+  osSemaphoreDef(readPosRxCmd_Semaphore);
+  readPosRxCmd_SemaphoreHandle = osSemaphoreCreate(osSemaphore(readPosRxCmd_Semaphore), 1);
+
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
   if(testDXL_semaphoreHandle != NULL)
   {
       // <---- ----- Non-blocking wait to take the token. This makes current count 0 ----- ---->
       osSemaphoreWait(testDXL_semaphoreHandle, 0);
+  }
+  if(readPosTxCmd_SemaphoreHandle != NULL)
+  {
+	  osSemaphoreWait(readPosTxCmd_SemaphoreHandle, 0);
+  }
+  if(readPosRxCmd_SemaphoreHandle != NULL)
+  {
+	  osSemaphoreWait(readPosRxCmd_SemaphoreHandle, 0);
   }
   /* USER CODE END RTOS_SEMAPHORES */
 
@@ -135,6 +174,10 @@ int main(void)
   /* definition and creation of defaultTask */
   osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 1024);
   defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
+
+  /* definition and creation of readPosTask */
+  osThreadDef(readPosTask, StartReadPositionTask, osPriorityNormal, 0, 2048);
+  readPosTaskHandle = osThreadCreate(osThread(readPosTask), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -406,7 +449,7 @@ uint16_t update_crc(unsigned short crc_accum, unsigned char *data_blk_ptr, unsig
 // <---- ----- Test Dynamixel_ID1 ----- ---->
 void test_dxl(void)
 {
-	uint8_t tmp[13] = {0xFF, 0xFF, 0xFD, 0x00, 0x01, 0x06, 0x00, 0x03, 0x41, 0x00, 0x01};	// Packet without CRC (11 bytes)
+	uint8_t tmp[20] = {0xFF, 0xFF, 0xFD, 0x00, 0x01, 0x06, 0x00, 0x03, 0x41, 0x00, 0x01};	// Packet without CRC (11 bytes)
 	uint16_t pkt_Len = tmp[5] + 5;  // (without CRC) Dynamixel 2.0: length byte + header
 
 	// Compute CRC over first 11 bytes
@@ -419,17 +462,82 @@ void test_dxl(void)
 	HAL_GPIO_WritePin(DXL_5_TX_EN_GPIO_Port, DXL_5_TX_EN_Pin , GPIO_PIN_SET);
 	HAL_UART_Transmit_IT(&huart5, (uint8_t *)tmp, (pkt_Len + 2));
 
-	osSemaphoreWait(testDXL_semaphoreHandle, osWaitForever);
+	/* wait for TX complete (signaled by TxCpltCallback) */
+	xSemaphoreTake(testDXL_semaphoreHandle, portMAX_DELAY);
 }
 
 // <---- ----- Transmit Complete Callback Function ----- ---->
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
+	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
 	if(huart->Instance == UART5)
 	{
         HAL_GPIO_WritePin(DXL_5_TX_EN_GPIO_Port, DXL_5_TX_EN_Pin , GPIO_PIN_RESET);
-        osSemaphoreRelease(testDXL_semaphoreHandle);
+
+//		xSemaphoreGiveFromISR(testDXL_semaphoreHandle, &xHigherPriorityTaskWoken);
+
+		xSemaphoreGiveFromISR(readPosTxCmd_SemaphoreHandle, &xHigherPriorityTaskWoken);
+		portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 	}
+}
+
+// <---- ----- Receive Complete Callback Function ----- ---->
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    if(huart->Instance == UART5)
+    {
+    	recBuffer[recCount++] = RecData;
+
+        HAL_UART_Receive_IT(&huart5, &RecData, 1);
+
+        if(recCount >= recBuffer[5] + 7)
+        {
+			xSemaphoreGiveFromISR(readPosRxCmd_SemaphoreHandle, &xHigherPriorityTaskWoken);
+			portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+        }
+    }
+}
+
+uint16_t ReadPos(uint8_t ID)
+{
+	uint8_t tmp[20] = {0xFF, 0xFF, 0xFD, 0x00, ID, 0x07, 0x00, 0x02, 0x84, 0x00, 0x04, 0x00};	// Packet without CRC (11 bytes)
+	uint16_t pkt_Len = tmp[5] + 5;  // (without CRC) Dynamixel 2.0: length byte + header
+
+	// Compute CRC over first 11 bytes
+	uint16_t crc = update_crc(0, tmp, pkt_Len);
+
+	// Append CRC at the end
+	tmp[pkt_Len] = crc & 0xFF;        // CRC Low byte
+	tmp[pkt_Len + 1] = (crc >> 8) & 0xFF; // CRC High byte
+
+	HAL_GPIO_WritePin(DXL_5_TX_EN_GPIO_Port, DXL_5_TX_EN_Pin , GPIO_PIN_SET);
+	HAL_UART_Transmit_IT(&huart5, (uint8_t *)tmp, (pkt_Len + 2));
+
+	/* wait for TX complete (signaled by TxCpltCallback) */
+	xSemaphoreTake(readPosTxCmd_SemaphoreHandle, portMAX_DELAY);
+
+	if(xSemaphoreTake(readPosRxCmd_SemaphoreHandle, 10) == pdTRUE)
+	{
+		if(recBuffer[0] == 0xFF && recBuffer[1] == 0xFF && recBuffer[2] == 0xFD)
+		{
+			uint16_t rx_crc = update_crc(0, recBuffer, (recBuffer[5] + 5));
+
+			if(recBuffer[recBuffer[5] + 5] == (rx_crc & 0xFF) &&
+			   recBuffer[recBuffer[5] + 6] == ((rx_crc >> 8) & 0xFF))
+			{
+				uint16_t pos = recBuffer[9] | (recBuffer[10] << 8);
+				recCount = 0;
+
+				return pos;
+			}
+		}
+		recCount = 0;
+	}
+
+	return 0xFFFF;
 }
 /* USER CODE END 4 */
 
@@ -446,12 +554,30 @@ void StartDefaultTask(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-	  test_dxl();
+//	  test_dxl();
 
 	  HAL_GPIO_TogglePin(LED1_GPIO_Port, LED1_Pin);
 	  osDelay(1000);
   }
   /* USER CODE END 5 */
+}
+
+/* USER CODE BEGIN Header_StartReadPositionTask */
+/**
+* @brief Function implementing the readPosTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartReadPositionTask */
+void StartReadPositionTask(void const * argument)
+{
+  /* USER CODE BEGIN StartReadPositionTask */
+  /* Infinite loop */
+  for(;;)
+  {
+	  dxlID.Pose_1 = ReadPos(ID_1);
+  }
+  /* USER CODE END StartReadPositionTask */
 }
 
 /**
