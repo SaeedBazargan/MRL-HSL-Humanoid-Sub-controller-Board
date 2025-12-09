@@ -37,6 +37,7 @@
 //#define Test_DXL
 #define DxlBufferSize				50
 #define RingBufferSize				50
+#define PositionResponseLength		15
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -57,7 +58,6 @@ osSemaphoreId testDXL_semaphoreHandle;
 osSemaphoreId readPosRxCmd_SemaphoreHandle;
 osSemaphoreId readPosTxCmd_SemaphoreHandle;
 /* USER CODE BEGIN PV */
-uint8_t rxByte3, rxByte5, rxByte6;
 
 typedef enum
 {
@@ -68,21 +68,20 @@ typedef enum
 
 typedef struct
 {
+	RBUF_HandleTypeDef *rbuf;
 	uint8_t ringBuffer[RingBufferSize];
 	uint8_t ringBuffer_Counter;
 }RING_BUF_t;
 RING_BUF_t ringBuf3, ringBuf5, ringBuf6;
-RBUF_HandleTypeDef *rbuf3, *rbuf5, *rbuf6;
 
 typedef struct
 {
-	uint8_t dxlRecData;
+	uint8_t rxByte;
 	uint8_t dxlRecBuffer[DxlBufferSize];
-	uint8_t dxl_recCounter;
+	uint16_t dxlPosition;
 }DXL_PKT_t;
 DXL_PKT_t pkt3, pkt5, pkt6;
 
-uint16_t dxlPosition[3];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -143,13 +142,13 @@ int main(void)
   /* USER CODE BEGIN 2 */
   HAL_GPIO_WritePin(DXL_PWR_EN_GPIO_Port, DXL_PWR_EN_Pin, GPIO_PIN_SET);
 
-  HAL_UART_Receive_IT(&huart3, &rxByte3, 1);
-  HAL_UART_Receive_IT(&huart5, &rxByte5, 1);
-  HAL_UART_Receive_IT(&huart6, &rxByte6, 1);
+  HAL_UART_Receive_IT(&huart3, &pkt3.rxByte, 1);
+  HAL_UART_Receive_IT(&huart5, &pkt5.rxByte, 1);
+  HAL_UART_Receive_IT(&huart6, &pkt6.rxByte, 1);
 
-  rbuf3 = RBUF_Init(sizeof(uint8_t), RingBufferSize);
-  rbuf5 = RBUF_Init(sizeof(uint8_t), RingBufferSize);
-  rbuf6 = RBUF_Init(sizeof(uint8_t), RingBufferSize);
+  ringBuf3.rbuf = RBUF_Init(sizeof(uint8_t), RingBufferSize);
+  ringBuf5.rbuf = RBUF_Init(sizeof(uint8_t), RingBufferSize);
+  ringBuf6.rbuf = RBUF_Init(sizeof(uint8_t), RingBufferSize);
   /* USER CODE END 2 */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -536,11 +535,10 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
 	if(huart->Instance == USART3)
 	{
-		pkt3.dxlRecData = rxByte3;
-		RBUF_Push(rbuf3, &pkt3.dxlRecData);
+		RBUF_Push(ringBuf3.rbuf, &pkt3.rxByte);
 		ringBuf3.ringBuffer_Counter++;
 
-		HAL_UART_Receive_IT(&huart3, &rxByte3, 1);
+		HAL_UART_Receive_IT(&huart3, &pkt3.rxByte, 1);
 
 		BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 		xSemaphoreGiveFromISR(readPosRxCmd_SemaphoreHandle, &xHigherPriorityTaskWoken);
@@ -549,11 +547,10 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
 	if(huart->Instance == UART5)
 	{
-		pkt5.dxlRecData = rxByte5;
-		RBUF_Push(rbuf5, &pkt5.dxlRecData);
+		RBUF_Push(ringBuf5.rbuf, &pkt5.rxByte);
 		ringBuf5.ringBuffer_Counter++;
 
-		HAL_UART_Receive_IT(&huart5, &rxByte5, 1);
+		HAL_UART_Receive_IT(&huart5, &pkt5.rxByte, 1);
 
 		BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 		xSemaphoreGiveFromISR(readPosRxCmd_SemaphoreHandle, &xHigherPriorityTaskWoken);
@@ -562,11 +559,10 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
 	if(huart->Instance == USART6)
 	{
-		pkt6.dxlRecData = rxByte6;
-		RBUF_Push(rbuf6, &pkt6.dxlRecData);
+		RBUF_Push(ringBuf6.rbuf, &pkt6.rxByte);
 		ringBuf6.ringBuffer_Counter++;
 
-		HAL_UART_Receive_IT(&huart6, &rxByte6, 1);
+		HAL_UART_Receive_IT(&huart6, &pkt6.rxByte, 1);
 
 		BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 		xSemaphoreGiveFromISR(readPosRxCmd_SemaphoreHandle, &xHigherPriorityTaskWoken);
@@ -647,20 +643,18 @@ void StartDefaultTask(void const * argument)
 void StartReadPositionU3Task(void const * argument)
 {
   /* USER CODE BEGIN StartReadPositionU3Task */
-	uint8_t i = 0;
   /* Infinite loop */
   for(;;)
   {
-	  if(ringBuf3.ringBuffer_Counter >= 15)
+	  if(ringBuf3.ringBuffer_Counter >= PositionResponseLength)
 	  {
 		  if(xSemaphoreTake(readPosRxCmd_SemaphoreHandle, portMAX_DELAY) == pdTRUE)
 		  {
-			  for(; i < 15; i++)
+			  for(uint8_t i = 0; i < PositionResponseLength; i++)
 			  {
-				  RBUF_Pop(rbuf3, &pkt3.dxlRecBuffer[i]);
+				  RBUF_Pop(ringBuf3.rbuf, &pkt3.dxlRecBuffer[i]);
 			  }
-			  dxlPosition[0] = Pos_Calculate(pkt3.dxlRecBuffer);
-			  i = 0;
+			  pkt3.dxlPosition = Pos_Calculate(pkt3.dxlRecBuffer);
 			  ringBuf3.ringBuffer_Counter = 0;
 		  }
 	  }
@@ -678,20 +672,18 @@ void StartReadPositionU3Task(void const * argument)
 void StartReadPositionU5Task(void const * argument)
 {
   /* USER CODE BEGIN StartReadPositionU5Task */
-	uint8_t i = 0;
   /* Infinite loop */
   for(;;)
   {
-	  if(ringBuf5.ringBuffer_Counter >= 15)
+	  if(ringBuf5.ringBuffer_Counter >= PositionResponseLength)
 	  {
 		  if(xSemaphoreTake(readPosRxCmd_SemaphoreHandle, portMAX_DELAY) == pdTRUE)
 		  {
-			  for(; i < 15; i++)
+			  for(uint8_t i = 0; i < PositionResponseLength; i++)
 			  {
-				  RBUF_Pop(rbuf5, &pkt5.dxlRecBuffer[i]);
+				  RBUF_Pop(ringBuf5.rbuf, &pkt5.dxlRecBuffer[i]);
 			  }
-			  dxlPosition[1] = Pos_Calculate(pkt5.dxlRecBuffer);
-			  i = 0;
+			  pkt5.dxlPosition = Pos_Calculate(pkt5.dxlRecBuffer);
 			  ringBuf5.ringBuffer_Counter = 0;
 		  }
 	  }
@@ -709,20 +701,18 @@ void StartReadPositionU5Task(void const * argument)
 void StartReadPositionU6Task(void const * argument)
 {
   /* USER CODE BEGIN StartReadPositionU6Task */
-	uint8_t i = 0;
   /* Infinite loop */
   for(;;)
   {
-	  if(ringBuf6.ringBuffer_Counter >= 15)
+	  if(ringBuf6.ringBuffer_Counter >= PositionResponseLength)
 	  {
 		  if(xSemaphoreTake(readPosRxCmd_SemaphoreHandle, portMAX_DELAY) == pdTRUE)
 		  {
-			  for(; i < 15; i++)
+			  for(uint8_t i = 0; i < PositionResponseLength; i++)
 			  {
-				  RBUF_Pop(rbuf6, &pkt6.dxlRecBuffer[i]);
+				  RBUF_Pop(ringBuf6.rbuf, &pkt6.dxlRecBuffer[i]);
 			  }
-			  dxlPosition[2] = Pos_Calculate(pkt6.dxlRecBuffer);
-			  i = 0;
+			  pkt6.dxlPosition = Pos_Calculate(pkt6.dxlRecBuffer);
 			  ringBuf6.ringBuffer_Counter = 0;
 		  }
 	  }
