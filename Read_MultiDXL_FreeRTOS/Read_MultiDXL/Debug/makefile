@@ -13,6 +13,7 @@ RM := rm -rf
 -include Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F/subdir.mk
 -include Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS/subdir.mk
 -include Middlewares/Third_Party/FreeRTOS/Source/subdir.mk
+-include Lib/ringBuffer_STM32/subdir.mk
 -include Drivers/STM32F4xx_HAL_Driver/Src/subdir.mk
 -include Core/Startup/subdir.mk
 -include Core/Src/subdir.mk
@@ -65,7 +66,7 @@ main-build: Read_MultiDXL.elf secondary-outputs
 
 # Tool invocations
 Read_MultiDXL.elf Read_MultiDXL.map: $(OBJS) $(USER_OBJS) /home/saeedbzrgn/Desktop/MRL-HSL-Humanoid-Sub-controller-Board/Read_MultiDXL_FreeRTOS/Read_MultiDXL/STM32F405RGTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "Read_MultiDXL.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"/home/saeedbzrgn/Desktop/MRL-HSL-Humanoid-Sub-controller-Board/Read_MultiDXL_FreeRTOS/Read_MultiDXL/STM32F405RGTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Read_MultiDXL.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+	arm-none-eabi-gcc -o "Read_MultiDXL.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"/home/saeedbzrgn/Desktop/MRL-HSL-Humanoid-Sub-controller-Board/Read_MultiDXL_FreeRTOS/Read_MultiDXL/STM32F405RGTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Read_MultiDXL.map" -Wl,--gc-sections -static -L"/home/saeedbzrgn/Desktop/MRL-HSL-Humanoid-Sub-controller-Board/Read_MultiDXL_FreeRTOS/Read_MultiDXL/Lib/ringBuffer_STM32" --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 

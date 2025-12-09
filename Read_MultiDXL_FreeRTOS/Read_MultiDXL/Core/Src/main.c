@@ -22,7 +22,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "string.h"
+#include "stdbool.h"
+#include "rbuf.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -32,7 +34,9 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define DxlBufferSize							50
+//#define Test_DXL
+#define DxlBufferSize				50
+#define RingBufferSize				50
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -46,28 +50,39 @@ UART_HandleTypeDef huart3;
 UART_HandleTypeDef huart6;
 
 osThreadId defaultTaskHandle;
-osThreadId readPosTaskHandle;
+osThreadId readPosU3TaskHandle;
+osThreadId readPosU5TaskHandle;
+osThreadId readPosU6TaskHandle;
 osSemaphoreId testDXL_semaphoreHandle;
-osSemaphoreId readPosTxCmd_SemaphoreHandle;
 osSemaphoreId readPosRxCmd_SemaphoreHandle;
+osSemaphoreId readPosTxCmd_SemaphoreHandle;
 /* USER CODE BEGIN PV */
-uint8_t RecData = 0;
-uint8_t recBuffer[DxlBufferSize];
-uint32_t recCount = 0;
+uint8_t rxByte3, rxByte5, rxByte6;
 
 typedef enum
 {
-	ID_1 = 0x01,
-	ID_2 = 0x02,
-	ID_3 = 0x03
+	ID_1 = 1,
+	ID_2 = 2,
+	ID_3 = 3
 }DXL_ID_t;
 
-typedef struct {
-    uint8_t Pose_1;
-    uint8_t Pose_2;
-    uint8_t Pose_3;
-} Pose_ID_t;
-Pose_ID_t dxlID;
+typedef struct
+{
+	uint8_t ringBuffer[RingBufferSize];
+	uint8_t ringBuffer_Counter;
+}RING_BUF_t;
+RING_BUF_t ringBuf3, ringBuf5, ringBuf6;
+RBUF_HandleTypeDef *rbuf3, *rbuf5, *rbuf6;
+
+typedef struct
+{
+	uint8_t dxlRecData;
+	uint8_t dxlRecBuffer[DxlBufferSize];
+	uint8_t dxl_recCounter;
+}DXL_PKT_t;
+DXL_PKT_t pkt3, pkt5, pkt6;
+
+uint16_t dxlPosition[3];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -77,12 +92,15 @@ static void MX_UART5_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USART6_UART_Init(void);
 void StartDefaultTask(void const * argument);
-void StartReadPositionTask(void const * argument);
+void StartReadPositionU3Task(void const * argument);
+void StartReadPositionU5Task(void const * argument);
+void StartReadPositionU6Task(void const * argument);
 
 /* USER CODE BEGIN PFP */
+uint16_t update_crc(uint16_t crc_accum, uint8_t *data_blk_ptr, uint16_t data_blk_size);
+void ReadPos_Request(uint8_t ID);
+uint16_t Pos_Calculate(uint8_t *packet);
 void test_dxl(void);
-uint16_t update_crc(unsigned short crc_accum, unsigned char *data_blk_ptr, unsigned short data_blk_size);
-uint16_t ReadPos(uint8_t ID);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -125,7 +143,13 @@ int main(void)
   /* USER CODE BEGIN 2 */
   HAL_GPIO_WritePin(DXL_PWR_EN_GPIO_Port, DXL_PWR_EN_Pin, GPIO_PIN_SET);
 
-  HAL_UART_Receive_IT(&huart5, &RecData, 1);
+  HAL_UART_Receive_IT(&huart3, &rxByte3, 1);
+  HAL_UART_Receive_IT(&huart5, &rxByte5, 1);
+  HAL_UART_Receive_IT(&huart6, &rxByte6, 1);
+
+  rbuf3 = RBUF_Init(sizeof(uint8_t), RingBufferSize);
+  rbuf5 = RBUF_Init(sizeof(uint8_t), RingBufferSize);
+  rbuf6 = RBUF_Init(sizeof(uint8_t), RingBufferSize);
   /* USER CODE END 2 */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -137,29 +161,16 @@ int main(void)
   osSemaphoreDef(testDXL_semaphore);
   testDXL_semaphoreHandle = osSemaphoreCreate(osSemaphore(testDXL_semaphore), 1);
 
-  /* definition and creation of readPosTxCmd_Semaphore */
-  osSemaphoreDef(readPosTxCmd_Semaphore);
-  readPosTxCmd_SemaphoreHandle = osSemaphoreCreate(osSemaphore(readPosTxCmd_Semaphore), 1);
-
   /* definition and creation of readPosRxCmd_Semaphore */
   osSemaphoreDef(readPosRxCmd_Semaphore);
   readPosRxCmd_SemaphoreHandle = osSemaphoreCreate(osSemaphore(readPosRxCmd_Semaphore), 1);
 
+  /* definition and creation of readPosTxCmd_Semaphore */
+  osSemaphoreDef(readPosTxCmd_Semaphore);
+  readPosTxCmd_SemaphoreHandle = osSemaphoreCreate(osSemaphore(readPosTxCmd_Semaphore), 1);
+
   /* USER CODE BEGIN RTOS_SEMAPHORES */
   /* add semaphores, ... */
-  if(testDXL_semaphoreHandle != NULL)
-  {
-      // <---- ----- Non-blocking wait to take the token. This makes current count 0 ----- ---->
-      osSemaphoreWait(testDXL_semaphoreHandle, 0);
-  }
-  if(readPosTxCmd_SemaphoreHandle != NULL)
-  {
-	  osSemaphoreWait(readPosTxCmd_SemaphoreHandle, 0);
-  }
-  if(readPosRxCmd_SemaphoreHandle != NULL)
-  {
-	  osSemaphoreWait(readPosRxCmd_SemaphoreHandle, 0);
-  }
   /* USER CODE END RTOS_SEMAPHORES */
 
   /* USER CODE BEGIN RTOS_TIMERS */
@@ -172,12 +183,20 @@ int main(void)
 
   /* Create the thread(s) */
   /* definition and creation of defaultTask */
-  osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 1024);
+  osThreadDef(defaultTask, StartDefaultTask, osPriorityNormal, 0, 512);
   defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
-  /* definition and creation of readPosTask */
-  osThreadDef(readPosTask, StartReadPositionTask, osPriorityNormal, 0, 2048);
-  readPosTaskHandle = osThreadCreate(osThread(readPosTask), NULL);
+  /* definition and creation of readPosU3Task */
+  osThreadDef(readPosU3Task, StartReadPositionU3Task, osPriorityNormal, 0, 1024);
+  readPosU3TaskHandle = osThreadCreate(osThread(readPosU3Task), NULL);
+
+  /* definition and creation of readPosU5Task */
+  osThreadDef(readPosU5Task, StartReadPositionU5Task, osPriorityNormal, 0, 1024);
+  readPosU5TaskHandle = osThreadCreate(osThread(readPosU5Task), NULL);
+
+  /* definition and creation of readPosU6Task */
+  osThreadDef(readPosU6Task, StartReadPositionU6Task, osPriorityNormal, 0, 1024);
+  readPosU6TaskHandle = osThreadCreate(osThread(readPosU6Task), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -399,10 +418,10 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 // <---- ----- Calculate CRC ----- ---->
-uint16_t update_crc(unsigned short crc_accum, unsigned char *data_blk_ptr, unsigned short data_blk_size)
+uint16_t update_crc(uint16_t crc_accum, uint8_t *data_blk_ptr, uint16_t data_blk_size)
 {
-    unsigned short i, j;
-    unsigned short crc_table[256] = {
+    uint16_t i, j;
+    static const uint16_t crc_table[256] = {
         0x0000, 0x8005, 0x800F, 0x000A, 0x801B, 0x001E, 0x0014, 0x8011,
         0x8033, 0x0036, 0x003C, 0x8039, 0x0028, 0x802D, 0x8027, 0x0022,
         0x8063, 0x0066, 0x006C, 0x8069, 0x0078, 0x807D, 0x8077, 0x0072,
@@ -439,16 +458,126 @@ uint16_t update_crc(unsigned short crc_accum, unsigned char *data_blk_ptr, unsig
 
     for(j = 0; j < data_blk_size; j++)
     {
-        i = ((unsigned short)(crc_accum >> 8) ^ data_blk_ptr[j]) & 0xFF;
+        i = ((uint16_t)(crc_accum >> 8) ^ data_blk_ptr[j]) & 0xFF;
         crc_accum = (crc_accum << 8) ^ crc_table[i];
     }
 
     return crc_accum;
 }
 
+// <---- ----- Read Present Position Function ----- ---->
+void ReadPos_Request(uint8_t ID)
+{
+	static uint8_t pkt[20];
+	pkt[0] = 0xFF;
+	pkt[1] = 0xFF;
+	pkt[2] = 0xFD;
+	pkt[3] = 0x00;
+	pkt[4] = ID;
+	pkt[5] = 0x07;
+	pkt[6] = 0x00;
+	pkt[7] = 0x02;
+	pkt[8] = 0x84;
+	pkt[9] = 0x00;
+	pkt[10] = 0x04;
+	pkt[11] = 0x00;	// Packet without CRC (11 bytes)
+
+	uint16_t pkt_Len = pkt[5] + 5;  // (without CRC) Dynamixel 2.0: length byte + header
+
+	// Compute CRC over first 11 bytes
+	uint16_t crc = update_crc(0, pkt, pkt_Len);
+
+	// Append CRC at the end
+	pkt[pkt_Len] = crc & 0xFF;        // CRC Low byte
+	pkt[pkt_Len + 1] = (crc >> 8) & 0xFF; // CRC High byte
+
+	HAL_GPIO_WritePin(DXL_3_TX_EN_GPIO_Port, DXL_3_TX_EN_Pin , GPIO_PIN_SET);
+	HAL_GPIO_WritePin(DXL_5_TX_EN_GPIO_Port, DXL_5_TX_EN_Pin , GPIO_PIN_SET);
+	HAL_GPIO_WritePin(DXL_6_TX_EN_GPIO_Port, DXL_6_TX_EN_Pin , GPIO_PIN_SET);
+	HAL_UART_Transmit_IT(&huart3, (uint8_t *)pkt, (pkt_Len + 2));
+	HAL_UART_Transmit_IT(&huart5, (uint8_t *)pkt, (pkt_Len + 2));
+	HAL_UART_Transmit_IT(&huart6, (uint8_t *)pkt, (pkt_Len + 2));
+}
+
+uint16_t Pos_Calculate(uint8_t *packet)
+{
+	uint16_t position = packet[9] | (packet[10] << 8);
+
+	return position;
+}
+
+// <---- ----- Transmit Complete Callback Function ----- ---->
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+	if(huart->Instance == USART3)
+	{
+		HAL_GPIO_WritePin(DXL_3_TX_EN_GPIO_Port, DXL_3_TX_EN_Pin , GPIO_PIN_RESET);
+	}
+
+	if(huart->Instance == UART5)
+	{
+		HAL_GPIO_WritePin(DXL_5_TX_EN_GPIO_Port, DXL_5_TX_EN_Pin , GPIO_PIN_RESET);
+	}
+
+	if(huart->Instance == USART6)
+	{
+		HAL_GPIO_WritePin(DXL_6_TX_EN_GPIO_Port, DXL_6_TX_EN_Pin , GPIO_PIN_RESET);
+	}
+
+#ifdef Test_DXL
+	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+	xSemaphoreGiveFromISR(testDXL_semaphoreHandle, &xHigherPriorityTaskWoken);
+	portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+#endif/* Test_DXL */
+}
+
+// <---- ----- Receive Complete Callback Function ----- ---->
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	if(huart->Instance == USART3)
+	{
+		pkt3.dxlRecData = rxByte3;
+		RBUF_Push(rbuf3, &pkt3.dxlRecData);
+		ringBuf3.ringBuffer_Counter++;
+
+		HAL_UART_Receive_IT(&huart3, &rxByte3, 1);
+
+		BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+		xSemaphoreGiveFromISR(readPosRxCmd_SemaphoreHandle, &xHigherPriorityTaskWoken);
+		portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+	}
+
+	if(huart->Instance == UART5)
+	{
+		pkt5.dxlRecData = rxByte5;
+		RBUF_Push(rbuf5, &pkt5.dxlRecData);
+		ringBuf5.ringBuffer_Counter++;
+
+		HAL_UART_Receive_IT(&huart5, &rxByte5, 1);
+
+		BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+		xSemaphoreGiveFromISR(readPosRxCmd_SemaphoreHandle, &xHigherPriorityTaskWoken);
+		portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+	}
+
+	if(huart->Instance == USART6)
+	{
+		pkt6.dxlRecData = rxByte6;
+		RBUF_Push(rbuf6, &pkt6.dxlRecData);
+		ringBuf6.ringBuffer_Counter++;
+
+		HAL_UART_Receive_IT(&huart6, &rxByte6, 1);
+
+		BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+		xSemaphoreGiveFromISR(readPosRxCmd_SemaphoreHandle, &xHigherPriorityTaskWoken);
+		portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+	}
+}
+
 // <---- ----- Test Dynamixel_ID1 ----- ---->
 void test_dxl(void)
 {
+#ifdef Test_DXL
 	uint8_t tmp[20] = {0xFF, 0xFF, 0xFD, 0x00, 0x01, 0x06, 0x00, 0x03, 0x41, 0x00, 0x01};	// Packet without CRC (11 bytes)
 	uint16_t pkt_Len = tmp[5] + 5;  // (without CRC) Dynamixel 2.0: length byte + header
 
@@ -464,80 +593,7 @@ void test_dxl(void)
 
 	/* wait for TX complete (signaled by TxCpltCallback) */
 	xSemaphoreTake(testDXL_semaphoreHandle, portMAX_DELAY);
-}
-
-// <---- ----- Transmit Complete Callback Function ----- ---->
-void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
-{
-	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-
-	if(huart->Instance == UART5)
-	{
-        HAL_GPIO_WritePin(DXL_5_TX_EN_GPIO_Port, DXL_5_TX_EN_Pin , GPIO_PIN_RESET);
-
-//		xSemaphoreGiveFromISR(testDXL_semaphoreHandle, &xHigherPriorityTaskWoken);
-
-		xSemaphoreGiveFromISR(readPosTxCmd_SemaphoreHandle, &xHigherPriorityTaskWoken);
-		portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-	}
-}
-
-// <---- ----- Receive Complete Callback Function ----- ---->
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-
-    if(huart->Instance == UART5)
-    {
-    	recBuffer[recCount++] = RecData;
-
-        HAL_UART_Receive_IT(&huart5, &RecData, 1);
-
-        if(recCount >= recBuffer[5] + 7)
-        {
-			xSemaphoreGiveFromISR(readPosRxCmd_SemaphoreHandle, &xHigherPriorityTaskWoken);
-			portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-        }
-    }
-}
-
-uint16_t ReadPos(uint8_t ID)
-{
-	uint8_t tmp[20] = {0xFF, 0xFF, 0xFD, 0x00, ID, 0x07, 0x00, 0x02, 0x84, 0x00, 0x04, 0x00};	// Packet without CRC (11 bytes)
-	uint16_t pkt_Len = tmp[5] + 5;  // (without CRC) Dynamixel 2.0: length byte + header
-
-	// Compute CRC over first 11 bytes
-	uint16_t crc = update_crc(0, tmp, pkt_Len);
-
-	// Append CRC at the end
-	tmp[pkt_Len] = crc & 0xFF;        // CRC Low byte
-	tmp[pkt_Len + 1] = (crc >> 8) & 0xFF; // CRC High byte
-
-	HAL_GPIO_WritePin(DXL_5_TX_EN_GPIO_Port, DXL_5_TX_EN_Pin , GPIO_PIN_SET);
-	HAL_UART_Transmit_IT(&huart5, (uint8_t *)tmp, (pkt_Len + 2));
-
-	/* wait for TX complete (signaled by TxCpltCallback) */
-	xSemaphoreTake(readPosTxCmd_SemaphoreHandle, portMAX_DELAY);
-
-	if(xSemaphoreTake(readPosRxCmd_SemaphoreHandle, 10) == pdTRUE)
-	{
-		if(recBuffer[0] == 0xFF && recBuffer[1] == 0xFF && recBuffer[2] == 0xFD)
-		{
-			uint16_t rx_crc = update_crc(0, recBuffer, (recBuffer[5] + 5));
-
-			if(recBuffer[recBuffer[5] + 5] == (rx_crc & 0xFF) &&
-			   recBuffer[recBuffer[5] + 6] == ((rx_crc >> 8) & 0xFF))
-			{
-				uint16_t pos = recBuffer[9] | (recBuffer[10] << 8);
-				recCount = 0;
-
-				return pos;
-			}
-		}
-		recCount = 0;
-	}
-
-	return 0xFFFF;
+#endif /* Test_DXL */
 }
 /* USER CODE END 4 */
 
@@ -551,33 +607,127 @@ uint16_t ReadPos(uint8_t ID)
 void StartDefaultTask(void const * argument)
 {
   /* USER CODE BEGIN 5 */
+	uint8_t id = 1;
   /* Infinite loop */
   for(;;)
   {
-//	  test_dxl();
+#ifdef Test_DXL
+	  test_dxl();
+#endif
+
+	  switch(id)
+	  {
+		  case ID_1:
+			  ReadPos_Request(ID_1);
+			  id = 2;
+			  break;
+		  case ID_2:
+			  ReadPos_Request(ID_2);
+			  id = 3;
+			  break;
+		  case ID_3:
+			  ReadPos_Request(ID_3);
+			  id = 1;
+			  break;
+	  }
 
 	  HAL_GPIO_TogglePin(LED1_GPIO_Port, LED1_Pin);
-	  osDelay(1000);
+	  osDelay(100);
   }
   /* USER CODE END 5 */
 }
 
-/* USER CODE BEGIN Header_StartReadPositionTask */
+/* USER CODE BEGIN Header_StartReadPositionU3Task */
 /**
-* @brief Function implementing the readPosTask thread.
+* @brief Function implementing the readPosU3Task thread.
 * @param argument: Not used
 * @retval None
 */
-/* USER CODE END Header_StartReadPositionTask */
-void StartReadPositionTask(void const * argument)
+/* USER CODE END Header_StartReadPositionU3Task */
+void StartReadPositionU3Task(void const * argument)
 {
-  /* USER CODE BEGIN StartReadPositionTask */
+  /* USER CODE BEGIN StartReadPositionU3Task */
+	uint8_t i = 0;
   /* Infinite loop */
   for(;;)
   {
-	  dxlID.Pose_1 = ReadPos(ID_1);
+	  if(ringBuf3.ringBuffer_Counter >= 15)
+	  {
+		  if(xSemaphoreTake(readPosRxCmd_SemaphoreHandle, portMAX_DELAY) == pdTRUE)
+		  {
+			  for(; i < 15; i++)
+			  {
+				  RBUF_Pop(rbuf3, &pkt3.dxlRecBuffer[i]);
+			  }
+			  dxlPosition[0] = Pos_Calculate(pkt3.dxlRecBuffer);
+			  i = 0;
+			  ringBuf3.ringBuffer_Counter = 0;
+		  }
+	  }
   }
-  /* USER CODE END StartReadPositionTask */
+  /* USER CODE END StartReadPositionU3Task */
+}
+
+/* USER CODE BEGIN Header_StartReadPositionU5Task */
+/**
+* @brief Function implementing the readPosU5Task thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartReadPositionU5Task */
+void StartReadPositionU5Task(void const * argument)
+{
+  /* USER CODE BEGIN StartReadPositionU5Task */
+	uint8_t i = 0;
+  /* Infinite loop */
+  for(;;)
+  {
+	  if(ringBuf5.ringBuffer_Counter >= 15)
+	  {
+		  if(xSemaphoreTake(readPosRxCmd_SemaphoreHandle, portMAX_DELAY) == pdTRUE)
+		  {
+			  for(; i < 15; i++)
+			  {
+				  RBUF_Pop(rbuf5, &pkt5.dxlRecBuffer[i]);
+			  }
+			  dxlPosition[1] = Pos_Calculate(pkt5.dxlRecBuffer);
+			  i = 0;
+			  ringBuf5.ringBuffer_Counter = 0;
+		  }
+	  }
+  }
+  /* USER CODE END StartReadPositionU5Task */
+}
+
+/* USER CODE BEGIN Header_StartReadPositionU6Task */
+/**
+* @brief Function implementing the readPosU6Task thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartReadPositionU6Task */
+void StartReadPositionU6Task(void const * argument)
+{
+  /* USER CODE BEGIN StartReadPositionU6Task */
+	uint8_t i = 0;
+  /* Infinite loop */
+  for(;;)
+  {
+	  if(ringBuf6.ringBuffer_Counter >= 15)
+	  {
+		  if(xSemaphoreTake(readPosRxCmd_SemaphoreHandle, portMAX_DELAY) == pdTRUE)
+		  {
+			  for(; i < 15; i++)
+			  {
+				  RBUF_Pop(rbuf6, &pkt6.dxlRecBuffer[i]);
+			  }
+			  dxlPosition[2] = Pos_Calculate(pkt6.dxlRecBuffer);
+			  i = 0;
+			  ringBuf6.ringBuffer_Counter = 0;
+		  }
+	  }
+  }
+  /* USER CODE END StartReadPositionU6Task */
 }
 
 /**

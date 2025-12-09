@@ -2,10 +2,10 @@
 CAD.formats=
 CAD.pinconfig=
 CAD.provider=
-FREERTOS.BinarySemaphores01=testDXL_semaphore,Dynamic,NULL,Available;readPosTxCmd_Semaphore,Dynamic,NULL,Available;readPosRxCmd_Semaphore,Dynamic,NULL,Available
+FREERTOS.BinarySemaphores01=testDXL_semaphore,Dynamic,NULL,Available;readPosRxCmd_Semaphore,Dynamic,NULL,Available;readPosTxCmd_Semaphore,Dynamic,NULL,Available
 FREERTOS.FootprintOK=true
 FREERTOS.IPParameters=Tasks01,configTOTAL_HEAP_SIZE,configUSE_NEWLIB_REENTRANT,FootprintOK,BinarySemaphores01
-FREERTOS.Tasks01=defaultTask,0,1024,StartDefaultTask,Default,NULL,Dynamic,NULL,NULL;readPosTask,0,2048,StartReadPositionTask,Default,NULL,Dynamic,NULL,NULL
+FREERTOS.Tasks01=defaultTask,0,512,StartDefaultTask,Default,NULL,Dynamic,NULL,NULL;readPosU3Task,0,1024,StartReadPositionU3Task,Default,NULL,Dynamic,NULL,NULL;readPosU5Task,0,1024,StartReadPositionU5Task,Default,NULL,Dynamic,NULL,NULL;readPosU6Task,0,1024,StartReadPositionU6Task,Default,NULL,Dynamic,NULL,NULL
 FREERTOS.configTOTAL_HEAP_SIZE=20000
 FREERTOS.configUSE_NEWLIB_REENTRANT=1
 File.Version=6
